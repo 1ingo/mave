@@ -1133,12 +1133,15 @@ class Vehicle:
         init_all=True,
         seed=env_config.SEED,
         max_connections=4,
+
     ):
         # 初始化车辆对象
         # vehicle_id: 车辆的唯一标识符
         self.vehicle_id = vehicle_id
         # height: 车辆天线的高度，从环境配置中获取
         self.height = env_config.VEHICLE_ANTENNA_HEIGHT
+
+        self.transpower = env_config.VEHICLE_TRANSMITTED_POWER,
         # position: 车辆的位置，初始值为 None
         self.position = None
         # angle: 车辆的角度，初始值为 None
@@ -1262,6 +1265,7 @@ class CustomVehicle(Vehicle):
         position: Point,
         sumo=traci,
         height=env_config.VEHICLE_ANTENNA_HEIGHT,
+        transpower=env_config.VEHICLE_TRANSMITTED_POWER,
         direction=0,
     ):
         # 初始化自定义车辆对象，继承自 Vehicle 类
@@ -1271,6 +1275,7 @@ class CustomVehicle(Vehicle):
         self.position = position
         # height: 车辆天线的高度，从环境配置中获取
         self.height = height
+        self.transpower = transpower
         # speed: 车辆的速度，初始值为 0
         self.speed = 0
         # acceleration: 车辆的加速度，初始值为 0

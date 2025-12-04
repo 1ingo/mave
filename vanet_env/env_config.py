@@ -95,6 +95,7 @@ MAX_JOB_SIZE = 256
 # 内容的数量
 NUM_CONTENT = 50
 
+VEHICLE_TRANSMITTED_POWER = 23
 """
 Cloud Config
 """

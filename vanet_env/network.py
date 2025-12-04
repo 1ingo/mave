@@ -509,13 +509,51 @@ def find_hops(start_rsu, target_rsu, rsu_network):
     # 如果无法到达目标 RSU，返回 -1
     return -1
 
-# OFDM + MIMO 单信道
-# 计算数据速率：C = B * log2(1 + SNR)
+def sinr(rsu: Rsu, vh: Vehicle, interference_watt, distance=None):
+    """
+    计算线性的信道功率增益 g_{i,j}
+    g = 1 / 10^(PL / 10) = 10^(-PL / 10)
+    """
+    if distance is not None:
+        # 确保 d1 不超过距离值
+        d1 = 10
+        d1 = min(d1, distance)
+        # 计算 d2
+        d2 = np.sqrt(distance ** 2 - d1 ** 2)
+        # 确保 d2 不超过距离值
+        d2 = min(d2, distance)
+    else:
+        # 获取 d1 和 d2 的值
+        d1, d2 = rsu.get_d1_d2(vh.get_position(), vh.get_angle())
+    path_loss = WinnerB1().path_loss_nlos(
+        d1, d2, rsu.frequency * 1e-3, rsu.height, vh.height
+    )
+
+    # 路径损耗 PL = P_tx / P_rx (线性倍数)
+    # 所以增益 g = P_rx / P_tx = 1 / PL
+    g_ij = 10 ** (-path_loss / 10)
+
+    # 获取发射功率
+    p_ij = dbm_to_watt(env_config.VEHICLE_TRANSMITTED_POWER)
+
+    # 计算分子: 信号功率 S = p * g
+    signal_power = p_ij * g_ij
+
+    # 获取分母: 噪声 + 干扰
+    # rsu.noise_power 已经是瓦特单位
+    noise_plus_interference = rsu.noise_power + interference_watt
+
+    # 计算 SINR
+    sinr = signal_power / noise_plus_interference
+
+    return sinr
+
+
 def channel_capacity(
     rsu: Rsu, vh: Vehicle, distance=None, bw=env_config.RSU_MAX_TRANSMITTED_BANDWIDTH
 ):
     if distance is not None:
         # 如果提供了距离，计算信道容量并转换为 Mbps
-        return bpsToMbps(bw * np.log2(1 + snr(rsu, vh, distance)))
+        return bpsToMbps(bw * np.log2(1 + sinr(rsu, vh, distance)))
     # 否则，直接计算信道容量并转换为 Mbps
-    return bpsToMbps(bw * np.log2(1 + snr(rsu, vh)))
+    return bpsToMbps(bw * np.log2(1 + sinr(rsu, vh)))
