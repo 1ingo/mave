@@ -1159,7 +1159,7 @@ class Vehicle:
         random.seed(self.seed)
 
         # 随机生成作业大小，范围在 8 到环境配置的最大作业大小之间
-        job_size = random.randint(8, env_config.MAX_JOB_SIZE)
+        self.job_size = random.randint(8, env_config.MAX_JOB_SIZE)
 
         # job_type: 作业的类型
         job_type = job_type
