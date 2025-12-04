@@ -557,6 +557,7 @@ def channel_capacity(
         return bpsToMbps(bw * np.log2(1 + sinr(rsu, vh, distance)))
     # 否则，直接计算信道容量并转换为 Mbps
     return bpsToMbps(bw * np.log2(1 + sinr(rsu, vh)))
+<<<<<<< HEAD
 
 def V2R_delay(rsu: Rsu, vh: Vehicle):
     job_size = vh.job_size
@@ -576,3 +577,5 @@ def V2C_delay(rsu: Rsu, vh: Vehicle):
     v2r_delay = V2R_delay(rsu, vh)
     prop_delay = env_config.CLOUD_TRANS_TIME
     return v2r_delay + trans_delay + prop_delay
+=======
+>>>>>>> a5a1f1b2726849ff3dc01ddf6e4765ca1fd0d9b8
