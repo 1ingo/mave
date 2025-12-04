@@ -119,10 +119,6 @@ R2R_BANDWIDTH = 1000
 # 假设光纤接入，例如 500 Mbps
 RSU_TO_CLOUD_BANDWIDTH = 500
 
-# RSU 到云端传播延迟 (T_prop_R2C), 单位: 秒
-# 广域网延迟，原代码 CLOUD_TRANS_TIME = 10 较大，这里作为纯传播延迟
-# 假设为 100ms (0.1s) 或者维持原设定的 10s (视仿真尺度而定)
-CLOUD_PROPAGATION_DELAY = 0.1
 """
 utility
 """

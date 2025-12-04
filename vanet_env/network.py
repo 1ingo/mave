@@ -574,5 +574,5 @@ def V2C_delay(rsu: Rsu, vh: Vehicle):
     job_size = vh.job_size
     trans_delay = job_size / env_config.RSU_TO_CLOUD_BANDWIDTH
     v2r_delay = V2R_delay(rsu, vh)
-    prop_delay = env_config.CLOUD_PROPAGATION_DELAY
+    prop_delay = env_config.CLOUD_TRANS_TIME
     return v2r_delay + trans_delay + prop_delay
