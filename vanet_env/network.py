@@ -557,7 +557,6 @@ def channel_capacity(
         return bpsToMbps(bw * np.log2(1 + sinr(rsu, vh, distance)))
     # 否则，直接计算信道容量并转换为 Mbps
     return bpsToMbps(bw * np.log2(1 + sinr(rsu, vh)))
-<<<<<<< HEAD
 
 def V2R_delay(rsu: Rsu, vh: Vehicle):
     job_size = vh.job_size
@@ -577,5 +576,79 @@ def V2C_delay(rsu: Rsu, vh: Vehicle):
     v2r_delay = V2R_delay(rsu, vh)
     prop_delay = env_config.CLOUD_TRANS_TIME
     return v2r_delay + trans_delay + prop_delay
-=======
->>>>>>> a5a1f1b2726849ff3dc01ddf6e4765ca1fd0d9b8
+
+def calculate_computation_time(vehicle, local_rsu, rsus, rsu_network, action, allocated_cp_rsu):
+    """
+    计算计算延迟 T^{comp}
+
+    参数:
+    vehicle: 车辆对象
+    local_rsu: 车辆连接的本地 RSU 对象
+    rsus: 所有 RSU 的列表 (用于查找邻居)
+    rsu_network: RSU 邻接网络图
+    action: 卸载决策 (1: RSU, 0: Cloud)
+    allocated_cp_rsu: RSU 分配给该车辆的算力 f_r
+
+    返回:
+    float: 计算时间 T^{comp}
+    """
+
+    # c_v: 任务计算量
+    c_v = env_config.JOB_CP_REQUIRE
+    # content_id: 内容标识
+    content_id = vehicle.job_type
+
+    if action == 0:
+        return env_config.CLOUD_COMPUTATIONALLY_TIME
+
+
+    elif action == 1:
+        f_r = env_config.RSU_COMPUTATION_POWER
+
+        # 本地 RSU 命中
+        if local_rsu.has_content(content_id):
+            return c_v / f_r
+
+        # 本地未命中，检查邻居 RSU
+        else:
+            # 获取邻居 ID 列表
+            neighbor_ids = rsu_network[local_rsu.id]
+
+            # 查找是否有邻居缓存了该内容
+            min_r2r_delay = float('inf')
+            found_in_neighbor = False
+
+            for nid in neighbor_ids:
+                neighbor = rsus[nid]
+                if neighbor.has_content(content_id):
+                    found_in_neighbor = True
+
+                    # 计算 R2R 延迟 (数据传输延迟)
+                    # 假设 s_k (数据大小) 用于计算从邻居拉取数据的延迟
+                    s_k = vehicle.job.job_size
+
+                    # 跳数 (邻居通常为 1 跳，或者是根据 find_hops 计算)
+                    hops = 1  # 或者 use network.find_hops(local_rsu.id, nid, rsu_network)
+
+                    # 使用之前的 calc_r2r_delay 函数 (需确保已定义)
+                    # T_{com}^{R2R} = s_k / R_{R2R} + T_{prop}^{R2R}
+                    # 这里假设我们手动计算或调用之前的函数:
+                    r2r_bw = env_config.RSU_MAX_TRANSMITTED_BANDWIDTH  # 或者专用的 R2R 带宽
+                    t_trans = s_k / (r2r_bw / 1e6)  # Mbps
+                    t_prop = hops * (env_config.HOP_LATENCY / 1000.0)  # ms to s
+
+                    r2r_delay = t_trans + t_prop
+
+                    if r2r_delay < min_r2r_delay:
+                        min_r2r_delay = r2r_delay
+
+            if found_in_neighbor:
+                # 邻居命中
+                return (c_v / f_r) + min_r2r_delay
+            else:
+                # 子情况 C: 邻居也没命中 (Miss)
+                # 需要从云端下载到 RSU 再计算 (增加了 R2C 延迟)
+                # T = c_v / f_r + T_{R2C_download}
+                return (c_v / f_r) + env_config.CLOUD_TRANS_TIME
+
+    return float('inf')
