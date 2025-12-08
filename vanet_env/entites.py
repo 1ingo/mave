@@ -724,16 +724,6 @@ class Rsu:
         veh_ids,
         bw_ratio=1,
     ):
-        """
-        在一帧内分配带宽。
-
-        参数:
-        alloc_index (int): 分配索引
-        bw_a (int): 分配的带宽
-        proc_veh_set (set): 处理车辆集合
-        veh_ids (list): 车辆 ID 列表
-        bw_ratio (float): 带宽比率，默认为 1
-        """
         from vanet_env import network
 
         self.bw_ratio = bw_ratio
@@ -758,14 +748,6 @@ class Rsu:
     def allocate_computing_power(
         self, ac_list: list, cp_usage, proc_veh_set: set["Vehicle"]
     ):
-        """
-        分配计算能力。
-
-        参数:
-        ac_list (list): 计算能力分配列表
-        cp_usage (float): 计算能力使用率
-        proc_veh_set (set): 处理车辆集合
-        """
         self.cp_usage = cp_usage
         # 复制计算能力分配列表
         self.computation_power_alloc = list.copy(ac_list)
@@ -774,12 +756,6 @@ class Rsu:
         ...
 
     def cache_content(self, caching_decision: list):
-        """
-        缓存内容。
-
-        参数:
-        caching_decision (list): 缓存决策列表
-        """
         # 找到缓存决策列表中值为 1 的元素的索引，并取前 10 个
         content_index_list = np.where(caching_decision == 1)[0][:10].tolist()
         # 复制内容索引列表到缓存内容列表
@@ -787,13 +763,6 @@ class Rsu:
         ...
 
     def allocate_bandwidth(self, abw_list: list, bw_ratio):
-        """
-        分配带宽。
-
-        参数:
-        abw_list (list): 带宽分配列表
-        bw_ratio (float): 带宽比率
-        """
         from vanet_env import network
 
         self.bw_ratio = bw_ratio
@@ -812,14 +781,6 @@ class Rsu:
 
     # dev tag: index connect?
     def connect(self, conn, jumping=True, index=-1):
-        """
-        建立与车辆的连接。
-
-        参数:
-        conn: 连接对象
-        jumping (bool): 是否插队，默认为 True
-        index (int): 连接索引，默认为 -1
-        """
         # 调用连接对象的 connect 方法
         conn.connect(self)
 
@@ -836,29 +797,17 @@ class Rsu:
                 self.connections.replace(conn, index)
 
     def disconnect_last(self):
-        """
-        断开最后一个连接。
-        """
         if self.connections[-1] is not None:
             # 若最后一个连接存在，断开该连接
             self.disconnect(self.connections[-1])
 
     def disconnect(self, conn):
-        """
-        断开与指定连接的连接。
-
-        参数:
-        conn: 要断开的连接对象
-        """
         # 调用连接对象的 disconnect 方法
         conn.disconnect()
         # 从连接列表中移除该连接
         self.connections.remove(elem=conn)
 
     def update_conn_list(self):
-        """
-        更新连接列表，清理过期的连接。
-        """
         # 清理过期的连接
         for idx, conn in enumerate(self.connections):
             if conn is None:
@@ -888,16 +837,6 @@ class Rsu:
         handling: int,
         veh_ids,
     ):
-        """
-        在一帧内处理作业。
-
-        参数:
-        proc_veh_set (set): 处理车辆集合
-        rsu (Rsu): RSU 对象
-        h_index (int): 处理索引
-        handling (int): 是否处理，1 表示处理，0 表示不处理
-        veh_ids (list): 车辆 ID 列表
-        """
         # not handling 也 抛弃
         veh: Vehicle = self.handling_job_queue[h_index]
 
@@ -928,15 +867,6 @@ class Rsu:
     def frame_queuing_job(
         self, conn_rsu: "Rsu", veh: "Vehicle", index: int, cloud: bool = False
     ):
-        """
-        在一帧内将作业加入队列。
-
-        参数:
-        conn_rsu (Rsu): 连接的 RSU 对象
-        veh (Vehicle): 车辆对象
-        index (int): 队列索引
-        cloud (bool): 是否为云处理，默认为 False
-        """
         if cloud:
             # there can be modify to more adaptable
             # specify rsu process this
@@ -952,12 +882,6 @@ class Rsu:
         self.handling_job_queue.replace(elem=veh, index=index)
 
     def handling_job(self, jbh_list: list):
-        """
-        处理作业。
-
-        参数:
-        jbh_list (list): 作业处理列表
-        """
         # handle
         for idx, hconn in enumerate(self.handling_job_queue):
             # handle if 1
@@ -977,13 +901,6 @@ class Rsu:
         ...
 
     def queuing_job(self, conn, cloud=False):
-        """
-        将作业加入队列。
-
-        参数:
-        conn: 连接对象
-        cloud (bool): 是否为云处理，默认为 False
-        """
         if cloud:
             # there can be modify to more adaptable
             # 若为云处理，更新连接对象的 RSU 和作业的处理 RSU ID
@@ -1001,15 +918,6 @@ class Rsu:
             self.handling_job_queue.append(conn)
 
     def distance(self, vh_position):
-        """
-        计算与车辆的距离。
-
-        参数:
-        vh_position (Point): 车辆的位置
-
-        返回:
-        float: 计算得到的距离
-        """
         return np.sqrt(
             (self.position.x - vh_position.x) ** 2
             + (self.position.y - vh_position.y) ** 2
@@ -1017,29 +925,9 @@ class Rsu:
 
     # to km
     def real_distance(self, vh_position):
-        """
-        计算与车辆的实际距离（单位：km）。
-
-        参数:
-        vh_position (Point): 车辆的位置
-
-        返回:
-        float: 计算得到的实际距离
-        """
         return self.distance(vh_position) / (1000 / env_config.COORDINATE_UNIT)
 
     def get_d1_d2(self, vh_position: Point, vh_direction):
-        """
-        该方法用于计算RSU（路侧单元）相对于车辆的垂直距离和水平距离。
-        垂直距离是指与车辆行驶方向垂直的距离，水平距离是指与车辆行驶方向平行的距离。
-
-        参数:
-        vh_position (Point): 车辆的位置，由 x 和 y 坐标组成的点对象。
-        vh_direction (float): 车辆的行驶方向，以角度表示，0 表示正北方向，90 表示正东方向。
-
-        返回:
-        tuple: 包含垂直距离和水平距离的元组。
-        """
         # vh_direction is angle in degree, 0 points north, 90 points east ...
         # for convince: 0-45°, 315°-360° is north; 135°-225° is south
         # if (0 <= vh_direction <= 45) or (315 <= vh_direction <= 360):
@@ -1082,6 +970,16 @@ class Rsu:
 
         # 返回垂直距离和水平距离的元组
         return vertical_distance, horizontal_distance
+
+    def has_content(self, content_id):
+        """
+        检查 RSU 是否缓存了指定内容
+        参数:
+        content_id: 内容的唯一标识符
+        返回:
+        bool: 如果缓存命中返回 True，否则 False
+        """
+        return content_id in self.caching_contents
 
 
 class Job:
@@ -1127,21 +1025,19 @@ class Vehicle:
     def __init__(
         self,
         vehicle_id,
+        transpower,
         sumo,
         join_time,
-        job_type=None,
         init_all=True,
         seed=env_config.SEED,
         max_connections=4,
-
     ):
         # 初始化车辆对象
-        # vehicle_id: 车辆的唯一标识符
         self.vehicle_id = vehicle_id
         # height: 车辆天线的高度，从环境配置中获取
         self.height = env_config.VEHICLE_ANTENNA_HEIGHT
 
-        self.transpower = env_config.VEHICLE_TRANSMITTED_POWER,
+        self.transpower = env_config.VEHICLE_TRANSMITTED_POWER
         # position: 车辆的位置，初始值为 None
         self.position = None
         # angle: 车辆的角度，初始值为 None
@@ -1155,14 +1051,15 @@ class Vehicle:
         # first_time_caching: 车辆是否首次进行缓存操作，初始值为 True
         self.first_time_caching = True
 
+
         # 设置随机数种子
         random.seed(self.seed)
 
         # 随机生成作业大小，范围在 8 到环境配置的最大作业大小之间
-        self.job_size = random.randint(8, env_config.MAX_JOB_SIZE)
+        job_size = random.randint(8, env_config.MAX_JOB_SIZE)
 
         # job_type: 作业的类型
-        job_type = job_type
+        job_type = random.randint(0, env_config.NUM_CONTENT - 1)
 
         # job: 车辆的作业对象，作业 ID 为车辆 ID
         self.job = Job(vehicle_id, job_size, job_type)
@@ -1275,6 +1172,7 @@ class CustomVehicle(Vehicle):
         self.position = position
         # height: 车辆天线的高度，从环境配置中获取
         self.height = height
+
         self.transpower = transpower
         # speed: 车辆的速度，初始值为 0
         self.speed = 0

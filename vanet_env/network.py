@@ -224,13 +224,6 @@ class WinnerB1:
         d_BP = (4 * h_BS_eff * h_MS_eff * fc_hz) / env_config.C
         return d_BP
 
-    """
-    路径损耗公式：PL = Alog_10(d[m])+B+Clog_10(fc[GHz]/5.0)+X
-    其中 d 是发射机与接收机之间的距离（米），fc 是系统频率（GHz），
-    参数 A 包括路径损耗指数，参数 B 是截距，参数 C 描述路径损耗的频率依赖性，
-    X 是一个可选的、特定环境的项（例如，A1 NLOS 场景中的墙壁衰减）。
-    """
-
     def path_loss_los(self, d1, fc_ghz, h_BS, h_MS):
         # 确保距离不小于 11 米
         if d1 <= 10:
@@ -322,45 +315,6 @@ class WinnerB1:
             pl_nlos = self.path_loss_nlos(d1_values[0], d2, fc_ghz, h_BS, h_MS)
             print(f"d1: {d1_values[0]} m, d2: {d2} m, Path Loss: {pl_nlos:.2f} dB")
 
-    # def channel_capacity(self, rsu: Rsu, vh: Vehicle):
-    #     distance = rsu.real_distance(vh.position)
-    #     path_loss = path_loss()
-    #     received_power_dbm = transmitted_power_dbm - path_loss
-    #     received_power_w = 10 ** ((received_power_dbm - 30) / 10)
-    #     snr = received_power_w / noise_power
-    #     channel_capacity = bandwidth * np.log2(1 + snr)
-    #     return channel_capacity / 1e6  # 转换为 Mbps
-
-# 计算信噪比
-# P_r = P_t - PL(d)
-# SNR = P_r / N
-# P_r 需要转换为瓦特
-def snr(rsu: Rsu, vh: Vehicle, distance=None, path_loss_func="winner_b1"):
-    if path_loss_func == "winner_b1":
-        if distance is not None:
-            # 确保 d1 不超过距离值
-            d1 = 10
-            d1 = min(d1, distance)
-            # 计算 d2
-            d2 = np.sqrt(distance**2 - d1**2)
-            # 确保 d2 不超过距离值
-            d2 = min(d2, distance)
-        else:
-            # 获取 d1 和 d2 的值
-            d1, d2 = rsu.get_d1_d2(vh.get_position(), vh.get_angle())
-        # 计算路径损耗，注意需要减去增益（此处为开发标记）
-        # EIRP（有效全向辐射功率）
-        path_loss = WinnerB1().path_loss_nlos(
-            d1, d2, rsu.frequency * 1e-3, rsu.height, vh.height
-        )
-    else:
-        # 使用 Okumura-Hata 模型计算路径损耗
-        path_loss = OkumuraHata().okumura_hata_path_loss(rsu, vh)
-
-    # 计算信噪比
-    snr = dbm_to_watt(rsu.get_tx_power() - path_loss) / rsu.noise_power
-    return snr
-
 # 反向使用 Okumura-Hata 路径损耗公式计算最大连接距离
 # 通用的最大距离算法
 # 不适用于 Winner + B1 模型
@@ -377,7 +331,7 @@ def max_distance(rsu: Rsu):
         vh = CustomVehicle(0, Point((rsu.position.x + distance, rsu.position.y)))
 
         # 如果信噪比小于 RSU 的信噪比阈值，跳出循环
-        if snr(rsu, vh) < rsu.snr_threshold:
+        if sinr(rsu, vh) < rsu.snr_threshold:
             break
 
         # 更新最大距离
@@ -413,7 +367,6 @@ def max_distance_mbps(rsu: Rsu, rate_tr=env_config.DATA_RATE_TR):
 
     return max_distance
 
-# 不确定该函数的具体用途
 def max_rate(rsu: Rsu):
     # 距离为 1 米
     distance = 1
@@ -439,23 +392,6 @@ def bpsToMbps(bps):
 
 # 创建 RSU 网络的邻接表
 def network(coords, tree, k=3):
-    """
-    此函数为 RSU（路侧单元）网络创建一个邻接表。
-
-    参数:
-    coords (array-like): RSU 的坐标数组。
-    tree (KDTree): 由 RSU 坐标构建的 KDTree 对象。
-    k (int): 要考虑的最近邻数量（默认为 3）。
-
-    返回:
-    defaultdict: 表示网络的邻接表，其中每个键是一个 RSU 索引，值是其最近邻的索引列表。
-
-    示例:
-    >>> coords = np.array([(0, 0), (1, 1), (2, 2)])
-    >>> tree = KDTree(coords)
-    >>> network(coords, tree, k=2)
-    defaultdict(<class 'list'>, {0: [1], 1: [0, 2], 2: [1]})
-    """
     # 创建邻接表
     network = defaultdict(list)
     for i, coord in enumerate(coords):
@@ -470,18 +406,6 @@ def network(coords, tree, k=3):
 
 # 使用广度优先搜索（BFS）算法计算从起始 RSU 到目标 RSU 的跳数
 def find_hops(start_rsu, target_rsu, rsu_network):
-    """
-    此函数使用广度优先搜索（BFS）算法计算从起始 RSU 到目标 RSU 所需的跳数（或步数）。
-
-    参数:
-    start_rsu (int): 起始 RSU 的索引。
-    target_rsu (int): 目标 RSU 的索引。
-    rsu_network (dict): 表示 RSU 网络的字典，其中键是 RSU 索引，值是相邻 RSU 索引的列表。
-
-    返回:
-    int: 从起始 RSU 到目标 RSU 的跳数。如果目标 RSU 无法从起始 RSU 到达，则返回 -1。
-    """
-
     # 初始化队列，存储 (当前 RSU, 跳数)
     queue = deque([(start_rsu, 0)])
     # 初始化已访问集合
@@ -509,11 +433,13 @@ def find_hops(start_rsu, target_rsu, rsu_network):
     # 如果无法到达目标 RSU，返回 -1
     return -1
 
-def sinr(rsu: Rsu, vh: Vehicle, interference_watt, distance=None):
+
+def sinr(rsu: Rsu, vh: Vehicle, distance=None):
     """
     计算线性的信道功率增益 g_{i,j}
     g = 1 / 10^(PL / 10) = 10^(-PL / 10)
     """
+
     if distance is not None:
         # 确保 d1 不超过距离值
         d1 = 10
@@ -539,6 +465,32 @@ def sinr(rsu: Rsu, vh: Vehicle, interference_watt, distance=None):
     # 计算分子: 信号功率 S = p * g
     signal_power = p_ij * g_ij
 
+    interference_watt = 0
+
+    for other_veh in rsu.connections:
+        # 跳过空槽位
+        if other_veh is None:
+            continue
+
+        # 排除自己
+        if other_veh.vehicle_id == vh.vehicle_id:
+            continue
+
+        # 计算其他车辆到 RSU 的距离
+        d1, d2 = rsu.get_d1_d2(other_veh.position, other_veh.angle)
+
+        # 计算路径损耗
+        pl = WinnerB1().path_loss_nlos(
+            d1, d2,
+            rsu.frequency * 1e-3,
+            rsu.height,
+            other_veh.height
+        )
+
+        rx_power_dbm = env_config.VEHICLE_TRANSMITTED_POWER - pl
+        rx_power_watt = dbm_to_watt(rx_power_dbm)
+        interference_watt += rx_power_watt
+
     # 获取分母: 噪声 + 干扰
     # rsu.noise_power 已经是瓦特单位
     noise_plus_interference = rsu.noise_power + interference_watt
@@ -559,25 +511,26 @@ def channel_capacity(
     return bpsToMbps(bw * np.log2(1 + sinr(rsu, vh)))
 
 def V2R_delay(rsu: Rsu, vh: Vehicle):
-    job_size = vh.job_size
+    job_size = vh.job.job_size
     data_rate = channel_capacity(rsu, vh)
     T_com = job_size / data_rate
     return T_com
 
 def R2R_delay(vh: Vehicle, hops):
-    job_size = vh.job_size
+    job_size = vh.job.job_size
     trans_delay = job_size / env_config.R2R_BANDWIDTH
     prop_delay = hops * env_config.HOP_LATENCY
     return trans_delay + prop_delay
 
 def V2C_delay(rsu: Rsu, vh: Vehicle):
-    job_size = vh.job_size
+    job_size = vh.job.job_size
     trans_delay = job_size / env_config.RSU_TO_CLOUD_BANDWIDTH
     v2r_delay = V2R_delay(rsu, vh)
     prop_delay = env_config.CLOUD_TRANS_TIME
     return v2r_delay + trans_delay + prop_delay
 
-def calculate_computation_time(vehicle, local_rsu, rsus, rsu_network, action, allocated_cp_rsu):
+
+def calculate_computation_time(vehicle, local_rsu, rsus, rsu_network, action):
     """
     计算计算延迟 T^{comp}
 
@@ -587,7 +540,6 @@ def calculate_computation_time(vehicle, local_rsu, rsus, rsu_network, action, al
     rsus: 所有 RSU 的列表 (用于查找邻居)
     rsu_network: RSU 邻接网络图
     action: 卸载决策 (1: RSU, 0: Cloud)
-    allocated_cp_rsu: RSU 分配给该车辆的算力 f_r
 
     返回:
     float: 计算时间 T^{comp}

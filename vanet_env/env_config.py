@@ -96,12 +96,15 @@ MAX_JOB_SIZE = 256
 NUM_CONTENT = 50
 
 VEHICLE_TRANSMITTED_POWER = 23
+
+VEHICLE_COMPUTATION_POWER = 50
+
 """
 Cloud Config
 """
-# 云端的计算时间，单位未知（推测可能是秒）
+# 云端的计算时间
 CLOUD_COMPUTATIONALLY_TIME = 0.5
-# 云端的传输时间，单位未知（推测可能是秒）
+# 云端的传输时间
 CLOUD_TRANS_TIME = 10
 
 """
@@ -111,6 +114,7 @@ Others
 COORDINATE_UNIT = 1
 # 自由空间中的光速，单位为米每秒
 C = 3e8
+
 # RSU 回程网络带宽 (R2R), 单位: Mbps
 # 使用光纤或高带宽微波链路，例如 1 Gbps
 R2R_BANDWIDTH = 1000
@@ -125,7 +129,7 @@ utility
 # 非缓存延迟因子，用于计算非缓存情况下的延迟
 NON_CACHING_FACTOR = 1.25
 # 跳数延迟，单位为毫秒
-HOP_LATENCY = 3
+HOP_LATENCY = 3e-3
 # 每帧的跳数优化因子
 HOP_OPT_FACTOR = 90
 # VR 设备（Meta Quest 2 with Complex Avatar）的相关参数

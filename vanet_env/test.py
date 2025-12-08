@@ -593,7 +593,7 @@ def trajtest():
 if __name__ == "__main__":
     # cProfile.run("sumo_env_test()", sort="time")
     # sumo_env_test()
-    trajtest()
+    # trajtest()
     # is_full = np.array([True, False, False])
     # is_in = np.array([False, True, False])
     # update_mask = is_full & is_in  # 需要更新的 RSU
