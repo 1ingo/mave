@@ -4,7 +4,7 @@ import sys
 from typing import List
 
 from shapely import Point
-
+from vanet_env import network
 from vanet_env import env_config
 import traci
 
@@ -502,6 +502,9 @@ class Rsu:
         self.avg_u = 0
         # 命中率列表
         self.hit_ratios = []
+        self.storage_capacity = env_config.RSU_STORAGE_CAPACITY  # 总容量 C_r
+        self.current_storage_usage = 0.0  # 当前已用空间 sum(s_k * x)
+        self.prev_caching_set = set()
 
     def check_idle(self, rsus, rsu_network):
         """
@@ -695,7 +698,36 @@ class Rsu:
             # 若车辆存在且 ID 在指定列表中，将车辆添加到处理车辆集合中
             proc_veh_set.add(veh.vehicle_id)
 
-    def frame_cache_content(self, caching_decision, num_content):
+    def _parse_decision(self, caching_decision):
+        """
+        解析缓存决策，将其转换为去重的内容 ID 列表。
+
+        参数:
+        caching_decision: 来自 Handler 的动作输出，通常是 content_id 的列表或数组
+
+        返回:
+        list: 包含有效 content_id 的列表
+        """
+        content_ids = []
+
+        # 处理列表或数组类型的输入
+        if isinstance(caching_decision, (list, np.ndarray)):
+            seen = set()
+            for item in caching_decision:
+                # 转换为标准整数 (处理 numpy.int64 等类型)
+                c_id = int(item)
+
+                # 简单的去重逻辑：同一帧没必要重复缓存同一个内容
+                if c_id not in seen:
+                    content_ids.append(c_id)
+                    seen.add(c_id)
+        # 处理单个数值类型的输入
+        else:
+            content_ids.append(int(caching_decision))
+
+        return content_ids
+
+    def frame_cache_content(self, caching_decision, num_content, cache_module):
         """
         在一帧内缓存内容。
 
@@ -703,17 +735,66 @@ class Rsu:
         caching_decision: 缓存决策，可以是单个值或列表
         num_content (int): 内容数量
         """
-        # caching_decision = math.floor(caching_decision * num_content)
-        if isinstance(caching_decision, list) or isinstance(
-            caching_decision, np.ndarray
-        ):
-            for c in caching_decision:
-                # 若缓存决策为列表或数组，将元素插入缓存内容队列头部
-                self.caching_contents.queue_jumping(c)
-        else:
-            caching_decision = caching_decision
-            # 若缓存决策为单个值，将其插入缓存内容队列头部
-            self.caching_contents.queue_jumping(caching_decision)
+        # 在更新前，记录当前的缓存状态为 "prev"
+        current_list = self.caching_contents.to_list_replace_none()
+        # 过滤掉 0 或 None (空槽位)
+        self.prev_caching_set = set([c for c in current_list if c is not None and c != 0])
+        # 1. 获取决策要缓存的内容列表
+        # caching_decision 可能是 [1, 0, 1...] 或者直接是 content_id
+        # 假设这里转换为了要缓存的 content_ids 列表
+        new_content_ids = self._parse_decision(caching_decision)
+
+        # 2. 计算所需空间
+        needed_size = 0
+        for cid in new_content_ids:
+            needed_size += cache_module.get_size(cid)
+
+        # 3. 简单的 FIFO/LRU 替换策略 (为了满足容量约束)
+        # 如果空间不足，移除最早加入的内容
+        while self.current_storage_usage + needed_size > self.storage_capacity:
+            if self.caching_contents.is_empty():
+                break  # 已经空了还是放不下，说明单个内容太大，或者逻辑异常
+
+            # 移除最旧的内容
+            removed_id = self.caching_contents.pop()  # 假设 pop 移除队尾
+            removed_size = cache_module.get_size(removed_id)
+            self.current_storage_usage -= removed_size
+
+        # 4. 存入新内容
+        for cid in new_content_ids:
+            # 再次检查空间 (防止上面 break 的情况)
+            size = cache_module.get_size(cid)
+            if self.current_storage_usage + size <= self.storage_capacity:
+                self.caching_contents.queue_jumping(cid)
+                self.current_storage_usage += size
+
+    def calculate_update_cost(self, rsus, rsu_network, cache_module):
+        """
+        计算缓存更新产生的总延迟惩罚 T_update
+        """
+
+        total_update_cost = 0.0
+
+        # 获取当前(更新后)的缓存集合
+        current_list = self.caching_contents.to_list_replace_none()
+        current_set = set([c for c in current_list if c is not None and c != 0])
+
+        # 找出本时刻新增的内容: 在当前集合中，但不在上一时刻集合中
+        # y_{r,k,t} = 1
+        new_contents = current_set - self.prev_caching_set
+
+        for content_id in new_contents:
+            # 计算 Fetch Cost
+            t_fetch = network.calculate_fetch_delay(
+                target_rsu=self,
+                content_id=content_id,
+                rsus=rsus,
+                rsu_network=rsu_network,
+                cache_module=cache_module
+            )
+            total_update_cost += t_fetch
+
+        return total_update_cost
 
     # notice, cal utility only when connect this rsu
     def frame_allocate_bandwidth(

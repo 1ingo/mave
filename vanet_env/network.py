@@ -522,12 +522,16 @@ def R2R_delay(vh: Vehicle, hops):
     prop_delay = hops * env_config.HOP_LATENCY
     return trans_delay + prop_delay
 
-def V2C_delay(rsu: Rsu, vh: Vehicle):
+def R2C_delay(rsu: Rsu, vh: Vehicle):
     job_size = vh.job.job_size
     trans_delay = job_size / env_config.RSU_TO_CLOUD_BANDWIDTH
-    v2r_delay = V2R_delay(rsu, vh)
     prop_delay = env_config.CLOUD_TRANS_TIME
-    return v2r_delay + trans_delay + prop_delay
+    return trans_delay + prop_delay
+
+def V2C_delay(rsu: Rsu, vh: Vehicle):
+    v2r_delay = V2R_delay(rsu, vh)
+    r2c_delay = R2C_delay(rsu, vh)
+    return v2r_delay + r2c_delay
 
 
 def calculate_computation_time(vehicle, local_rsu, rsus, rsu_network, action):
@@ -602,5 +606,59 @@ def calculate_computation_time(vehicle, local_rsu, rsus, rsu_network, action):
                 # 需要从云端下载到 RSU 再计算 (增加了 R2C 延迟)
                 # T = c_v / f_r + T_{R2C_download}
                 return (c_v / f_r) + env_config.CLOUD_TRANS_TIME
+    return None
 
-    return float('inf')
+
+def calculate_fetch_delay(target_rsu: Rsu, content_id, rsus: list, rsu_network: dict, cache_module):
+    """
+    计算缓存更新成本 T_fetch = min(T_R2C, min(T_R2R))
+
+    参数:
+    ...
+    cache_module: Caching 类的实例，用于获取内容大小
+    """
+
+    # 动态获取内容大小 s_k (单位假设为 Mbit)
+    # 确保内容 ID 是合法的
+    if content_id is None:
+        return 0.0
+
+    content_size_mbit = cache_module.get_size(content_id)
+
+    # 计算从云端获取的延迟 T_R2C
+    # 公式: T_trans = Size / Bandwidth + T_prop
+    # Bandwidth 单位是 Mbps, Size 单位是 Mbit -> 除法结果是秒
+    # RSU_TO_CLOUD_BANDWIDTH = 500 (Mbps)
+    # CLOUD_TRANS_TIME = 10 (s) (包含传播延迟)
+    t_r2c = content_size_mbit / env_config.RSU_TO_CLOUD_BANDWIDTH + env_config.CLOUD_TRANS_TIME
+
+    # 计算从邻居获取的延迟 T_R2R
+    min_t_r2r = float('inf')
+
+    # 获取邻居 ID 列表
+    if target_rsu.id in rsu_network:
+        neighbor_ids = rsu_network[target_rsu.id]
+
+        for nid in neighbor_ids:
+            neighbor_rsu = rsus[nid]
+
+            # 检查邻居是否缓存了该内容
+            if content_id in neighbor_rsu.caching_contents:
+                # 计算 R2R 传输延迟
+                # R2R_BANDWIDTH = 1000 (Mbps)
+                t_trans = content_size_mbit / env_config.R2R_BANDWIDTH
+
+                # 计算传播延迟 (假设跳数为 1)
+                # HOP_LATENCY = 3 (ms) -> 需要除以 1000 转为秒
+                hops = 1
+                t_prop = hops * (env_config.HOP_LATENCY / 1000.0)
+
+                t_r2r = t_trans + t_prop
+
+                if t_r2r < min_t_r2r:
+                    min_t_r2r = t_r2r
+
+    # 4. 取云端和邻居中的最小值
+    t_fetch = min(t_r2c, min_t_r2r)
+
+    return t_fetch

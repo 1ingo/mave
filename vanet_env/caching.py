@@ -27,6 +27,9 @@ class Caching:
         # 要缓存的内容数量
         self.num_caching = num_caching
 
+        self.content_list = []
+        self.content_sizes = []
+
     def get_content(self, time):
         """
         根据时间和内容的流行度，从 content_list 中随机选择一个内容。
@@ -175,8 +178,29 @@ class Caching:
             if len(unique_top_ids_ordered) == self.num_content:
                 break
 
-        # 将不重复的 id 列表赋值给类的属性
-        self.content_list = unique_top_ids_ordered
+        min_size = 512
+        max_size = 2048
+
+        # 生成与 content_list 长度一致的大小数组
+        # content_sizes[k] 对应 content_list[k] 的大小
+        self.content_sizes = np.random.randint(
+            low=min_size,
+            high=max_size,
+            size=len(self.content_list)
+        )
+
+        # 打印一下以便调试
+        # print(f"Generated sizes for {len(self.content_list)} contents.")
 
         # 返回不重复的 id 列表、聚合数据框列表和合并后的聚合数据框
         return self.content_list, self.aggregated_df_list, self.aggregated_df
+
+
+    def get_size(self, content_idx):
+        """
+        根据内容索引 k 获取其大小 s_k
+        """
+        if 0 <= content_idx < len(self.content_sizes):
+            return self.content_sizes[content_idx]
+        else:
+            return 512

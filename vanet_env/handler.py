@@ -747,7 +747,7 @@ class TrajectoryHandler(Handler):
             # 6. 处理缓存动作 (Caching)
             # 决定缓存哪些内容 (Content ID)
             a = action[pre:]
-            rsu.frame_cache_content(a, self.env.max_content)
+            rsu.frame_cache_content(a, self.env.max_content, cache_module=self.env.cache)
 
         pass
 
