@@ -11,279 +11,232 @@ from vanet_env import env_config
 from vanet_env.entites import Rsu, Vehicle, OrderedQueueList
 from vanet_env import network, utils
 
-
 # 计算固定策略下的效用和缓存命中率
 def fixed_calculate_utility(
-    # 车辆字典，键为车辆ID，值为Vehicle对象
-    vehs: Dict[str, Vehicle],
-    # RSU列表，每个元素为Rsu对象
-    rsus: List[Rsu],
-    # RSU网络对象
-    rsu_network,
-    # 当前时间步
-    time_step,
-    # 帧率
-    fps,
-    # 权重参数
-    weight,
-    # 最大QoE值，默认为环境配置中的MAX_QOE
-    max_qoe=env_config.MAX_QOE,
-    # 是否使用整数效用，默认为False
-    int_utility=False,
-    # 最大连接数，默认为环境配置中的MAX_CONNECTIONS
-    max_connections=env_config.MAX_CONNECTIONS,
-    # 核心数，默认为环境配置中的NUM_CORES
-    num_cores=env_config.NUM_CORES,
+        vehs: Dict[str, Vehicle],
+        rsus: List[Rsu],
+        rsu_network,
+        time_step,
+        fps,
+        weight,
+        cache_module,  # 必须传入 cache 模块用于计算内容大小
+        max_qoe=env_config.MAX_QOE,
+        int_utility=False,
+        max_connections=env_config.MAX_CONNECTIONS,
+        num_cores=env_config.NUM_CORES,
 ):
-    # 用于存储每个RSU的效用列表
     rsu_utility_dict = defaultdict(list)
-    # 用于存储每个RSU的缓存命中率
     caching_hit_ratios = {}
-    # 跳数惩罚率
-    hop_penalty_rate = 0.1
-    # 最大能源效率
-    max_ee = 0.2
-    # QoE因子，用于平衡QoE和能源效率
-    qoe_factor = 1 - max_ee
+    rsu_delay_stats = defaultdict(list)
 
-    # 观察reward用，这里暂时没有实际作用
+    # 保持原有的权重结构
+    hop_penalty_rate = 0.1
+    time_factor = 0.8
+    qoe_factor = 1 - time_factor
+
     if time_step >= 50:
         time_step
 
-    # 由车辆计算，只需计算在范围内车辆的QoE，这里可修改
     for v_id, veh in vehs.items():
-        # 相当于idle的车辆不算
         if veh.vehicle_id not in rsus[veh.connected_rsu_id].range_connections:
             continue
 
-        # 类型注解，明确veh为Vehicle对象
         veh: Vehicle
 
-        # 如果车辆连接到云端
+        # 计算基准时间
+        # 用于将物理延迟 (秒) 转换为 0-1 的得分
+        t_ref_comm = veh.job.job_size / (env_config.JOB_DR_REQUIRE * 1e6) if env_config.JOB_DR_REQUIRE > 0 else 1.0
+        t_ref_comp = env_config.JOB_CP_REQUIRE / (env_config.RSU_COMPUTATION_POWER / 2)
+        t_reference = t_ref_comm + t_ref_comp + 0.1
+
+        # 云端处理
         if veh.is_cloud:
-            # 云端连接的QoE为最大QoE的0.1倍
+            veh.job.job_processed = veh.job.job_size  # 瞬间完成
+
+            # 云端只有 0.1 的基础分
             qoe = max_qoe * 0.1
-            # 将该车辆的QoE添加到连接的RSU的效用列表中
-            rsu_utility_dict[veh.connected_rsu_id].append(qoe)
-            # 如果车辆的前一个QoE为空，则将当前QoE赋值给前一个QoE
+
+            t_comm_total = network.v2c_delay(rsus[veh.connected_rsu_id], veh)
+            t_comp_cloud = env_config.CLOUD_COMPUTATIONALLY_TIME
+            t_total = t_comm_total + t_comp_cloud
+            rsu_delay_stats[veh.connected_rsu_id].append(t_total)
+
+            # 延迟越大，得分越低
+            delay_score = min(t_reference / (t_total + 1e-9), 1.0)
+
+            final_utility = qoe * qoe_factor + time_factor * delay_score
+            rsu_utility_dict[veh.connected_rsu_id].append(float(final_utility))
+
+            # 更新状态
             if veh.job.pre_qoe is None:
                 veh.job.pre_qoe = qoe
             else:
-                # 否则将当前QoE赋值给前一个QoE
                 veh.job.pre_qoe = veh.job.qoe
-            # 更新车辆的当前QoE
             veh.job.qoe = qoe
             continue
 
-        # 计算传输QoE，取车辆数据速率和作业数据速率要求的最小值，再除以作业数据速率要求
+        # 边缘 RSU 处理
+
+        # 计算通信延迟 (T_comm)
+        if veh.data_rate > 0:
+            t_comm = veh.job.job_size / (veh.data_rate * 1e6)
+        else:
+            t_comm = 100.0
+
+        # 计算传输 QoE (基于瞬时速率)
         trans_qoe = (
-            min(veh.data_rate, env_config.JOB_DR_REQUIRE) / env_config.JOB_DR_REQUIRE
+                min(veh.data_rate, env_config.JOB_DR_REQUIRE) / env_config.JOB_DR_REQUIRE
         )
-        # 存储每个RSU的传输QoE列表
+
         trans_qoes = defaultdict(list)
-        # 存储每个RSU的处理QoE列表
         proc_qoes = defaultdict(list)
-        # 存储每个RSU的缓存命中状态列表
         caching_hit_states = defaultdict(list)
 
-        # 如果车辆的作业处理RSU列表为空
         if veh.job.processing_rsus.is_empty():
-            # 相当于在连接却无处理，一般不会
-            if veh.connected_rsu_id != None:
-                # 惩罚之，将该RSU的效用列表中添加0.0
+            if veh.connected_rsu_id is not None:
                 rsu_utility_dict[veh.connected_rsu_id].append(0.0)
 
-        # 所有作业分配比例之和
         job_ratio_all = 0.0
 
-        # 一般是邻居RSU
         for p_rsu in veh.job.processing_rsus:
-            # 即单个作业分配比例
-            # QoE计算在最后一个循环之后进行
             if p_rsu is not None:
-                # 类型注解，明确p_rsu为Rsu对象
                 p_rsu: Rsu
-                # 获取车辆在处理RSU的处理作业列表中的索引
                 p_idx = p_rsu.handling_jobs.index((veh, 0))
-                # 获取作业分配比例
                 job_ratio = p_rsu.handling_jobs[p_idx][1]
-                # 作业分配比例累加
                 job_ratio_all += job_ratio
 
-                # 如果作业分配比例不为0
                 if job_ratio != 0:
-                    # 计算处理QoE，取处理RSU的实际CPU分配除以作业分配比例和作业CPU要求的最小值，再除以作业CPU要求
-                    process_qoe = (
-                        min(
-                            p_rsu.real_cp_alloc[p_idx % p_rsu.max_cores] / job_ratio,
-                            env_config.JOB_CP_REQUIRE,
-                        )
-                        / env_config.JOB_CP_REQUIRE
-                    )
-                else:
-                    # 作业分配比例为0时，处理QoE为0.0
-                    process_qoe = 0.0
+                    allocated_cp = p_rsu.real_cp_alloc[p_idx % p_rsu.max_cores]
 
-                # 获取车辆连接的RSU
+                    veh.job.job_processed += allocated_cp
+
+                    # 计算计算 QoE (基于瞬时算力供给率)
+                    process_qoe = (
+                            min(
+                                allocated_cp / job_ratio,
+                                env_config.JOB_CP_REQUIRE,
+                            )
+                            / env_config.JOB_CP_REQUIRE
+                    )
+
+                    # 计算计算延迟 (T_comp)
+                    if allocated_cp > 0:
+                        t_comp = (env_config.JOB_CP_REQUIRE * job_ratio) / allocated_cp
+                    else:
+                        t_comp = 100.0
+                else:
+                    process_qoe = 0.0
+                    t_comp = 100.0
+
                 trans_rsu: Rsu = rsus[veh.connected_rsu_id]
 
-                # 如果处理RSU就是车辆连接的RSU
-                if p_rsu.id == veh.connected_rsu_id:
-                    # 取处理QoE和传输QoE的最小值作为QoE
-                    qoe = min(process_qoe, trans_qoe)
-                    # 缓存使用标志
-                    use_caching = False
-                    # 缓存调试
-                    if veh.job.job_type in trans_rsu.caching_contents:
-                        # 如果作业类型在缓存内容中，QoE增加15%，但不超过1
-                        qoe = min(qoe + qoe * 0.15, 1)
-                        use_caching = True
-                    else:
-                        # 如果作业类型不在缓存内容中，QoE减少10%，但不低于0
-                        qoe = max(qoe - qoe * 0.1, 0)
-                        use_caching = False
+                # 计算获取延迟 (T_fetch)
+                needed_content_id = veh.job.job_type
+                t_fetch = 0.0
+                use_caching = False
 
-                    # 只有第一次进来才append
-                    if use_caching or veh.connected_rsu_id != veh.pre_connected_rsu_id:
-                        veh.first_time_caching = False
-                        # 记录缓存命中状态为1
-                        caching_hit_states[veh.connected_rsu_id].append(1)
-                    else:
-                        veh.first_time_caching = False
-                        # 记录缓存命中状态为0
-                        caching_hit_states[veh.connected_rsu_id].append(0)
-
-                    # 计算传输RSU的能源效率
-                    trans_rsu.ee = max_ee * (1 - trans_rsu.cp_usage)
-
-                    # 将QoE乘以QoE因子加上传输RSU的能源效率，添加到传输QoE列表中
-                    trans_qoes[veh.connected_rsu_id].append(
-                        float(qoe * qoe_factor + trans_rsu.ee)
-                    )
-                    # 将QoE乘以QoE因子加上处理RSU的能源效率，添加到处理QoE列表中
-                    proc_qoes[p_rsu.id].append(float(qoe * qoe_factor + p_rsu.ee))
-
+                if needed_content_id in p_rsu.caching_contents:
+                    t_fetch = 0.0
+                    use_caching = True
                 else:
-                    # 如果处理RSU不是车辆连接的RSU
-                    qoe = min(process_qoe, trans_qoe)
-                    # 跳数惩罚，QoE减少跳数惩罚率，不低于0
-                    qoe = max(qoe - qoe * hop_penalty_rate, 0)
+                    # 未命中，计算去邻居或云端的时间
+                    t_fetch = network.calculate_fetch_delay(
+                        target_rsu=p_rsu, content_id=needed_content_id,
+                        rsus=rsus, rsu_network=rsu_network, cache_module=cache_module
+                    )
+                    use_caching = False
 
-                    if veh.job.job_type in rsus[veh.connected_rsu_id].caching_contents:
-                        # 如果作业类型在连接RSU的缓存内容中，QoE增加15%，但不超过1
+                # 计算迁移延迟 (T_mig)
+                t_mig = 0.0
+                if p_rsu.id != veh.connected_rsu_id:
+                    t_mig = veh.job.job_size / (env_config.R2R_BANDWIDTH * 1e6) + (env_config.HOP_LATENCY / 1000.0)
+
+                # 计算总延迟并转换为得分
+                t_total = t_comm + t_comp + t_fetch + t_mig
+                rsu_delay_stats[veh.connected_rsu_id].append(t_total)
+                # 延迟得分: 延迟越低越接近 1，延迟越高越接近 0
+                delay_score = min(t_reference / (t_total + 1e-9), 1.0)
+
+                # 处理本地 vs 远程的 QoE 惩罚逻辑
+                if p_rsu.id == veh.connected_rsu_id:
+                    qoe = min(process_qoe, trans_qoe)
+                    if use_caching:
                         qoe = min(qoe + qoe * 0.15, 1)
-                        use_caching = True
                     else:
-                        # 如果作业类型不在连接RSU的缓存内容中，QoE减少10%，但不低于0
+                        qoe = max(qoe - qoe * 0.1, 0)
+                else:
+                    qoe = min(process_qoe, trans_qoe)
+                    qoe = max(qoe - qoe * hop_penalty_rate, 0)  # 跳数惩罚
+                    if veh.job.job_type in rsus[veh.connected_rsu_id].caching_contents:  # 这里应该查连接RSU还是处理RSU? 原代码是连接RSU
+                        qoe = min(qoe + qoe * 0.15, 1)
+                        use_caching = True  # 修正原有逻辑的变量复用
+                    else:
                         qoe = max(qoe - qoe * 0.1, 0)
                         use_caching = False
 
-                    if use_caching or veh.connected_rsu_id != veh.pre_connected_rsu_id:
-                        veh.first_time_caching = False
-                        # 记录缓存命中状态为1
-                        caching_hit_states[veh.connected_rsu_id].append(1)
-                    else:
-                        veh.first_time_caching = False
-                        # 记录缓存命中状态为0
-                        caching_hit_states[veh.connected_rsu_id].append(0)
+                # 记录缓存命中
+                if use_caching or veh.connected_rsu_id != veh.pre_connected_rsu_id:
+                    veh.first_time_caching = False
+                    caching_hit_states[veh.connected_rsu_id].append(1)
+                else:
+                    veh.first_time_caching = False
+                    caching_hit_states[veh.connected_rsu_id].append(0)
 
-                    # 计算处理RSU的能源效率
-                    p_rsu.ee = max_ee * (1 - p_rsu.cp_usage)
-                    # 计算传输RSU的能源效率
-                    trans_rsu.ee = max_ee * (1 - trans_rsu.cp_usage)
+                final_utility = qoe * qoe_factor + time_factor * delay_score
 
-                    # 将QoE乘以QoE因子加上传输RSU的能源效率，添加到传输QoE列表中
-                    trans_qoes[veh.connected_rsu_id].append(
-                        float(qoe * qoe_factor + trans_rsu.ee)
-                    )
-                    # fixed
-                    proc_qoes[p_rsu.id].append(float(qoe * qoe_factor + p_rsu.ee))
+                trans_qoes[veh.connected_rsu_id].append(float(final_utility))
+                proc_qoes[p_rsu.id].append(float(final_utility))
 
-        # 计算被处理RSU的平均QoE
         num_proc_rus = len(proc_qoes.keys())
-        # 没有进入if-else
         if num_proc_rus == 0:
             continue
         else:
-            # 作业分配比例之和不能超过1.0
             if job_ratio_all > 1.0:
                 assert NotImplementedError("Impossible value")
 
-            # 将传输QoE列表展平
             flattened_trans_qoes = list(chain.from_iterable(trans_qoes.values()))
-            # 计算传输QoE的平均值
             avg_trans_qoes = np.mean(flattened_trans_qoes)
-            # 计算加权平均传输QoE
             weighted_avg_trans_qoes = float(avg_trans_qoes * job_ratio_all)
 
-            # 将处理QoE列表展平
             flattened_proc_qoes = list(chain.from_iterable(proc_qoes.values()))
-            # 计算处理QoE的平均值
             avg_proc_qoes = np.mean(flattened_proc_qoes)
-            # 计算加权平均处理QoE
             weighted_avg_proc_qoes = float(avg_proc_qoes * job_ratio_all)
 
-            # 取加权平均传输QoE和加权平均处理QoE的最小值作为最终QoE
-            qoe = min(weighted_avg_trans_qoes, weighted_avg_proc_qoes)
+            # 这里的 qoe 实际上已经是包含了 delay_score 的 utility 了
+            utility_val = min(weighted_avg_trans_qoes, weighted_avg_proc_qoes)
 
-            # 预迁移QoE，刚进来时有多少job ratio就按系数比例加多少qoe
-            # if veh.connected_rsu_id != veh.pre_connected_rsu_id:
-            #     t_rsu: Rsu = rsus[veh.connected_rsu_id]
-            #     idx_pre = t_rsu.pre_handling_jobs.index((veh, 0))
-            #     idx_now = t_rsu.handling_jobs.index((veh, 0))
-            #     eps = 0
-            #     job_ratio_all_add_eps = job_ratio_all + eps
-
-            #     if idx_pre is not None:
-            #         veh, ratio = t_rsu.pre_handling_jobs[idx_pre]
-            #         # prehandling 奖励
-            #         qoe = max(qoe + qoe * ratio / job_ratio_all_add_eps, max_qoe)
-
-            #     if idx_now is not None:
-            #         veh, ratio = t_rsu.handling_jobs[idx_now]
-            #         # nowhandling 奖励
-            #         qoe = max(qoe + qoe * ratio / job_ratio_all_add_eps, max_qoe)
-
-            # 导入车辆
+            # 导入车辆历史平滑
             if veh.job.pre_qoe is None:
-                # 如果车辆的前一个QoE为空，则将当前QoE赋值给前一个QoE
-                veh.job.pre_qoe = qoe
-                # 记录前一个处理QoE
+                veh.job.pre_qoe = utility_val  # 这里其实存的是 Utility
                 veh.job.pre_proc_qoe = weighted_avg_proc_qoes
-                # 记录前一个传输QoE
                 veh.job.pre_trans_qoe = weighted_avg_trans_qoes
-                # 效用等于最终QoE
-                utility = qoe
+                final_utility = utility_val
             else:
-                # 抖动因子0.2，如果增加可以添加更多QoE，否则
-                utility = 0.2 * (qoe - veh.job.pre_qoe) + 0.8 * qoe
-
-                # 更新车辆的前一个QoE、处理QoE和传输QoE
-                veh.job.pre_qoe = veh.job.qoe
+                final_utility = 0.2 * (utility_val - veh.job.pre_qoe) + 0.8 * utility_val
+                veh.job.pre_qoe = veh.job.qoe  # 滚动更新
                 veh.job.pre_proc_qoe = veh.job.proc_qoe
                 veh.job.pre_trans_qoe = veh.job.trans_qoe
 
-            # 更新车辆的传输QoE、处理QoE和当前QoE
+            # 更新车辆状态
             veh.job.trans_qoe = weighted_avg_trans_qoes
             veh.job.proc_qoe = weighted_avg_proc_qoes
-            veh.job.qoe = qoe
+            veh.job.qoe = final_utility  # 这里的 qoe 属性实际上存的是 utility
 
-            # 效用计算
-            # 如果要把这个策略清理，需要修改proc_qoes
+            # 记录到 RSU 字典
             for rsu_id, qoes in proc_qoes.items():
-                # 缓存命中次数除以总缓存访问次数
                 if len(caching_hit_states[rsu_id]) != 0:
-                    caching_hit_ratio = sum(caching_hit_states[rsu_id]) / len(
-                        caching_hit_states[rsu_id]
-                    )
+                    caching_hit_ratio = sum(caching_hit_states[rsu_id]) / len(caching_hit_states[rsu_id])
                     caching_hit_ratios[rsu_id] = caching_hit_ratio
 
                 if rsu_id == trans_rsu.id:
-                    # 这个trans_rsu id理论上必有，且理论上必是这三个proc中的一个，重复会稀释，需要检查吗
-                    # 是否分别导入trans和proc？
-                    rsu_utility_dict[trans_rsu.id].append(utility)
-                    # 不重复导入
+                    rsu_utility_dict[trans_rsu.id].append(final_utility)
                 else:
-                    rsu_utility_dict[rsu_id].append(utility)
+                    rsu_utility_dict[rsu_id].append(final_utility)
+
+            for rsu in rsus:
+                if rsu.id in rsu_delay_stats and len(rsu_delay_stats[rsu.id]) > 0:
+                    rsu.avg_total_delay = np.mean(rsu_delay_stats[rsu.id])
+                else:
+                    rsu.avg_total_delay = 0.0
 
     return rsu_utility_dict, caching_hit_ratios

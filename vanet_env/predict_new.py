@@ -155,9 +155,6 @@ class DynamicTransformerPredictor(nn.Module):
         return predictions
 
 
-# -----------------------------------------------------------------------------
-# 3. 新的 Dataset (用于 K 辆车的局部数据)
-# -----------------------------------------------------------------------------
 class LocalTrajectoryDataset(Dataset):
     """
     这个 Dataset 从全局的 trajectory.csv 中为每个 (rsu, timestep) 组合

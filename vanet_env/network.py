@@ -510,28 +510,28 @@ def channel_capacity(
     # 否则，直接计算信道容量并转换为 Mbps
     return bpsToMbps(bw * np.log2(1 + sinr(rsu, vh)))
 
-def V2R_delay(rsu: Rsu, vh: Vehicle):
+def v2r_delay(rsu: Rsu, vh: Vehicle):
     job_size = vh.job.job_size
     data_rate = channel_capacity(rsu, vh)
     T_com = job_size / data_rate
     return T_com
 
-def R2R_delay(vh: Vehicle, hops):
+def r2r_delay(vh: Vehicle, hops):
     job_size = vh.job.job_size
     trans_delay = job_size / env_config.R2R_BANDWIDTH
     prop_delay = hops * env_config.HOP_LATENCY
     return trans_delay + prop_delay
 
-def R2C_delay(rsu: Rsu, vh: Vehicle):
+def r2c_delay( vh: Vehicle):
     job_size = vh.job.job_size
     trans_delay = job_size / env_config.RSU_TO_CLOUD_BANDWIDTH
     prop_delay = env_config.CLOUD_TRANS_TIME
     return trans_delay + prop_delay
 
-def V2C_delay(rsu: Rsu, vh: Vehicle):
-    v2r_delay = V2R_delay(rsu, vh)
-    r2c_delay = R2C_delay(rsu, vh)
-    return v2r_delay + r2c_delay
+def v2c_delay(rsu: Rsu, vh: Vehicle):
+    v2rdelay = v2r_delay(rsu, vh)
+    r2cdelay = r2c_delay(vh)
+    return v2rdelay + r2cdelay
 
 
 def calculate_computation_time(vehicle, local_rsu, rsus, rsu_network, action):
@@ -611,54 +611,67 @@ def calculate_computation_time(vehicle, local_rsu, rsus, rsu_network, action):
 
 def calculate_fetch_delay(target_rsu: Rsu, content_id, rsus: list, rsu_network: dict, cache_module):
     """
-    计算缓存更新成本 T_fetch = min(T_R2C, min(T_R2R))
+    计算获取内容的延迟成本 T_fetch。
+    逻辑：
+    1. 计算从云端获取的延迟 (R2C) 作为基准。
+    2. 遍历所有邻居 RSU，检查是否拥有该内容。
+    3. 如果邻居有，计算从邻居获取的延迟 (R2R)。
+    4. 取所有路径（云端、各邻居）中的最小值作为最终延迟。
+
+    该函数用于计算协同缓存中的 'Fetch Cost'，即当本地未命中时的惩罚。
 
     参数:
-    ...
-    cache_module: Caching 类的实例，用于获取内容大小
+    target_rsu: 需要内容的 RSU 对象
+    content_id: 内容 ID
+    rsus: 全局 RSU 列表 (用于通过 ID 获取 RSU 对象)
+    rsu_network: RSU 邻接网络字典 {rsu_id: [neighbor_id_1, ...]}
+    cache_module: 缓存模块实例 (用于获取内容大小)
     """
 
-    # 动态获取内容大小 s_k (单位假设为 Mbit)
-    # 确保内容 ID 是合法的
-    if content_id is None:
-        return 0.0
-
+    # 获取内容大小 (单位: Mbit)
+    # 假设 get_size 返回的是 Mbit，如果不是请根据 cache_module 修改单位转换
     content_size_mbit = cache_module.get_size(content_id)
 
-    # 计算从云端获取的延迟 T_R2C
-    # 公式: T_trans = Size / Bandwidth + T_prop
-    # Bandwidth 单位是 Mbps, Size 单位是 Mbit -> 除法结果是秒
-    # RSU_TO_CLOUD_BANDWIDTH = 500 (Mbps)
-    # CLOUD_TRANS_TIME = 10 (s) (包含传播延迟)
-    t_r2c = content_size_mbit / env_config.RSU_TO_CLOUD_BANDWIDTH + env_config.CLOUD_TRANS_TIME
+    # 计算从云端获取的延迟 (R2C Delay)
+    t_r2c = (content_size_mbit / env_config.RSU_TO_CLOUD_BANDWIDTH) + env_config.CLOUD_TRANS_TIME
 
-    # 计算从邻居获取的延迟 T_R2R
+    # 初始化最小 R2R 延迟为无穷大 (代表没有邻居有此内容)
     min_t_r2r = float('inf')
 
-    # 获取邻居 ID 列表
+    # 遍历邻居 RSU 进行协同查找
     if target_rsu.id in rsu_network:
         neighbor_ids = rsu_network[target_rsu.id]
 
         for nid in neighbor_ids:
             neighbor_rsu = rsus[nid]
 
-            # 检查邻居是否缓存了该内容
-            if content_id in neighbor_rsu.caching_contents:
-                # 计算 R2R 传输延迟
-                # R2R_BANDWIDTH = 1000 (Mbps)
+            # 检查邻居 RSU 是否缓存了该内容
+            has_it = False
+            if hasattr(neighbor_rsu, 'has_content'):
+                has_it = neighbor_rsu.has_content(content_id)
+            else:
+                has_it = content_id in neighbor_rsu.caching_contents
+
+            if has_it:
+                # 计算从该邻居获取的延迟 (R2R Delay)
+                # T_R2R = (ContentSize / Bandwidth_R2R) + PropagationDelay_R2R
+
+                # 传输延迟
                 t_trans = content_size_mbit / env_config.R2R_BANDWIDTH
 
-                # 计算传播延迟 (假设跳数为 1)
-                # HOP_LATENCY = 3 (ms) -> 需要除以 1000 转为秒
+                # 传播延迟：假设邻居跳数为 1
+                # 如果需要更精确，可以用 network.find_hops(target_rsu.id, nid, rsu_network)
                 hops = 1
-                t_prop = hops * (env_config.HOP_LATENCY / 1000.0)
+                t_prop = hops * (env_config.HOP_LATENCY / 1000.0)  # ms 转换为 s
 
-                t_r2r = t_trans + t_prop
+                t_current_r2r = t_trans + t_prop
 
-                if t_r2r < min_t_r2r:
-                    min_t_r2r = t_r2r
+                # 更新最小 R2R 延迟
+                if t_current_r2r < min_t_r2r:
+                    min_t_r2r = t_current_r2r
 
-    # 4. 取云端和邻居中的最小值
+    # 4. 决策：取云端延迟和邻居延迟中的最小值
+    # 如果所有邻居都没有 (min_t_r2r 仍为 inf)，则 min 会自动选择 t_r2c
     t_fetch = min(t_r2c, min_t_r2r)
 
     return t_fetch

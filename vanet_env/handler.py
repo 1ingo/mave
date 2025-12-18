@@ -370,6 +370,7 @@ class TrajectoryHandler(Handler):
             time_step=self.env.timestep,  # 当前时间步
             fps=self.env.fps,  # 仿真帧率
             weight=self.env.max_weight,  # 权重参数 (用于加权计算)
+            cache_module=self.env.cache,
         )
 
         # 将计算出的 QoE 字典存回 env，供其他模块使用
@@ -436,6 +437,7 @@ class TrajectoryHandler(Handler):
         # [3] norm_num_connected (已连接数/容量)
         # [4] norm_nb_h (邻居平均负载)
         original_local_dim = 5
+        feature_dim = (self.env.max_content * 2) * 2
 
         # [动态计算总维度]
         # 如果开启了轨迹预测，观测空间需要扩容以容纳预测数据
@@ -443,10 +445,10 @@ class TrajectoryHandler(Handler):
             # 新增维度 = K 辆车 * (x坐标 + y坐标 + 有效掩码mask)
             # 例如: 5辆车 * 3 = 15 维
             trajectory_dim = self.k_vehicles * 3
-            total_dim = original_local_dim + trajectory_dim
+            total_dim = original_local_dim + feature_dim + trajectory_dim
         else:
             # 如果没开启预测，保持基础维度
-            total_dim = original_local_dim
+            total_dim = original_local_dim + feature_dim
 
         # 定义 Box 空间 (连续数值，范围 0.0 到 1.0)
         self.env.local_neighbor_obs_space = spaces.Box(
@@ -806,6 +808,10 @@ class TrajectoryHandler(Handler):
         # 用于稍后在遍历 Agent 时快速查找，避免重复计算
         prediction_map = {}
 
+        # 清空上一帧的预测需求
+        for rsu in self.env.rsus:
+            rsu.clear_predicted_demand()
+
         # 批量预测准备与执行
         if self.use_trajectory_predictor:
             batch_histories = []  # 存放所有 RSU 的输入 Tensor (作为 Batch 的一部分)
@@ -919,18 +925,7 @@ class TrajectoryHandler(Handler):
                         if next_rsu_id != rsu_id:
                             target_rsu = self.env.rsus[next_rsu_id]
                             vehicle = self.env.vehicles[vid]
-
-                            # 执行协同缓存：强制让目标 RSU 缓存该车辆需要的内容
-                            # queue_jumping 会把内容插到队头 (高优先级)
-                            # 注意：这里假设车辆需要的内容就是当前的 job_type
-                            needed_content = vehicle.job.job_type
-
-                            # 为了防止频繁抖动，可以加一个概率或距离阈值，这里直接执行
-                            # 只有当内容不在缓存中时才操作，避免重复刷新
-                            if needed_content not in target_rsu.caching_contents:
-                                target_rsu.caching_contents.queue_jumping(needed_content)
-                                # 打印日志观察效果
-                                # print(f"Ref: 车辆 {vid} 即将从 RSU {rsu_id} 移动到 {next_rsu_id}，提前缓存内容 {needed_content}")
+                            target_rsu.add_predicted_demand(vehicle.job.job_type)
 
                     # 取出预测的 x, y 坐标
                     pred_x = preds[:, 0]
@@ -943,6 +938,35 @@ class TrajectoryHandler(Handler):
 
                     # 存入 map，供后续构建 Observation 使用
                     prediction_map[rsu_id]["final"] = flat_pred
+
+                # 提取所有 RSU 的特征 (Cache + Predicted Demand)
+                # get_node_feature 返回的是 [Cache_Vector, Demand_Vector]
+                feats_list = []
+                for rsu in self.env.rsus:
+                    feats_list.append(rsu.get_node_feature(self.env.max_content))
+
+                # 转为 Tensor: [N_RSU, Feature_Dim]
+                X = torch.tensor(np.array(feats_list), dtype=torch.float32)
+
+                # 构建归一化邻接矩阵 (只构建一次，缓存起来)
+                if not hasattr(self, "norm_adj"):
+                    num_nodes = len(self.env.rsus)
+                    adj = torch.eye(num_nodes)  # 自环
+                    for src, dsts in self.env.rsu_network.items():
+                        for dst in dsts:
+                            adj[src, dst] = 1.0  # 邻居
+
+                    # 归一化: D^-1 * A (即求平均)
+                    deg = adj.sum(dim=1)
+                    deg_inv = deg.pow(-1)
+                    deg_inv[deg_inv == float('inf')] = 0
+                    self.norm_adj = torch.mm(torch.diag(deg_inv), adj)
+
+                # 矩阵乘法聚合: Aggregated_X = Adj * X
+                with torch.no_grad():
+                    aggregated_features = torch.mm(self.norm_adj, X)
+
+                agg_feats_np = aggregated_features.numpy()
 
         # 构造最终观测 (遍历所有 Agent)
         for idx, a in enumerate(self.env.agents):
@@ -1014,13 +1038,22 @@ class TrajectoryHandler(Handler):
             # 组装 Local Observation
             # 包含自身详细状态 + 邻居平均状态
             # 基础维度 = 5
-            local_obs = (
+            local_base_obs = (
                     [norm_self_handling]  # 特征1: 任务数量比
                     + [norm_self_handling_ratio]  # 特征2: 计算负载比
                     + [norm_num_conn_queue]  # 特征3: 排队负载比
                     + [norm_num_connected]  # 特征4: 连接数比
                     + [norm_nb_h]  # 特征5: 邻居平均负载
             )
+
+            self_feat = feats_list[idx]
+            gnn_agg_feat = agg_feats_np[idx]
+
+            local_obs = np.concatenate([
+                np.array(local_base_obs, dtype=np.float32),
+                self_feat,
+                gnn_agg_feat
+            ])
 
             # 拼接预测数据到 Local Obs
             if self.use_trajectory_predictor:
@@ -1033,7 +1066,7 @@ class TrajectoryHandler(Handler):
 
                 # 将预测数据 (K*3 维) 拼接到 local_obs 后面
                 # 最终 local_obs 维度 = 5 + 15 = 20
-                local_obs = local_obs + list(pred_data)
+                local_obs = np.concatenate([local_obs, pred_data])
 
             # 构建最终的观测字典
             observations[a] = {
@@ -1065,47 +1098,57 @@ class TrajectoryHandler(Handler):
 
     def _update_job_handlings(self):
         """
-        该方法在每一步仿真后被调用。
-
-        遍历所有 RSU 的当前处理任务列表 (handling_jobs)。
-        检查每个任务对应的车辆状态：
-           - 车辆是否已离开地图 (not in vehicle_ids)？
-           - 车辆是否已断开连接 (not in connections)？
-           - 车辆是否切换了连接的 RSU (connected_rsu_id 变了)？
-        如果发现无效任务（车辆已离开或断连），则将任务从 RSU 的处理队列中移除。
-        调用 `job_deprocess` 方法进行后处理（如更新统计数据）。
+        维护所有车辆的任务生命周期。
+        覆盖范围：边缘计算任务 + 云端计算任务。
         """
-        for rsu in self.env.rsus:
-            # 备份当前处理列表，用于下一次状态比较
-            rsu.pre_handling_jobs.olist = list.copy(rsu.handling_jobs.olist)
 
-            # 遍历处理队列中的所有车辆任务
-            for tuple_veh in rsu.handling_jobs:
-                if tuple_veh is None:
-                    continue
-                veh, ratio = tuple_veh  # 解包元组：(车辆对象, 资源分配比例)
-                if veh is None:
-                    continue
+        # 遍历所有车辆，检查任务完成状态 (无论是云端还是边缘)
+        for veh_id, veh in self.env.vehicles.items():
+            # 检查任务是否完成 (由 utility.py 计算进度/标记完成)
+            if veh.job.done():
+                # 如果是在 RSU 处理的，需要从 RSU 队列中移除
+                if not veh.is_cloud:
+                    # 遍历该任务记录的所有处理 RSU
+                    # 注意：车辆可能同时在多个 RSU 排队 (协同处理)，都需要清理
+                    if not veh.job.processing_rsus.is_empty():
+                        for rsu in veh.job.processing_rsus:
+                            if rsu is not None:
+                                rsu.remove_job(elem=veh)
+                        # 清空记录
+                        veh.job.processing_rsus.clear()
+
+                # 生成新任务
+                if hasattr(veh, "refresh_job"):
+                    veh.refresh_job(
+                        cache_manager=self.env.cache,
+                        current_time_step=self.env.timestep,
+                        caching_step=self.env.caching_step
+                    )
+
+        # 遍历 RSU 队列，清理无效连接
+        for rsu in self.env.rsus:
+            # 备份列表用于遍历
+            current_jobs_list = list(rsu.handling_jobs)
+
+            for tuple_veh in current_jobs_list:
+                if tuple_veh is None: continue
+                veh, ratio = tuple_veh
+                if veh is None: continue
                 veh: Vehicle
 
-                # 情况 A: 车辆已完全离开仿真环境，或者已不在任何连接列表中
-                if (
-                        veh.vehicle_id not in self.env.vehicle_ids  # 车辆离开地图
-                        or veh not in self.env.connections  # 车辆不在当前连接集合中
-                ):
-                    # 将车辆从 RSU 的任务队列中移除
+                # 车辆已不在地图上，或不再连接网络
+                if (veh.vehicle_id not in self.env.vehicle_ids) or (veh not in self.env.connections):
                     rsu.remove_job(elem=veh)
-                    # 执行任务去处理逻辑 (如标记失败、释放资源等)
                     veh.job_deprocess(self.env.rsus, self.env.rsu_network)
+                    continue
 
-                # 情况 B: 车辆发生切换 (Handover)，离开了前一个 RSU 的范围
-                if (
-                        veh.connected_rsu_id != veh.pre_connected_rsu_id
-                ):
-                    # 从“前一个” RSU (pre_connected_rsu_id) 的列表中移除该车辆
-                    self.env.rsus[veh.pre_connected_rsu_id].remove_job(elem=veh)
-                    # 执行去处理逻辑
-                    veh.job_deprocess(self.env.rsus, self.env.rsu_network)
+                # 车辆发生了 RSU 切换 (Handover)
+                # 如果车辆连接的 RSU 变了，且当前遍历的 RSU 是它“之前”连接的，则移除
+                if veh.connected_rsu_id != veh.pre_connected_rsu_id:
+                    # 只有当我是它“前任”的时候才移除，避免把自己现任移除掉
+                    if rsu.id == veh.pre_connected_rsu_id:
+                        rsu.remove_job(elem=veh)
+                        veh.job_deprocess(self.env.rsus, self.env.rsu_network)
 
     def _update_all_rsus_idle(self):
         """

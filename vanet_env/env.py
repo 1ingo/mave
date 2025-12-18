@@ -54,7 +54,8 @@ from sumolib import checkBinary
 import multiprocessing as mp
 
 import datetime
-
+import torch
+from torch_geometric.data import Data
 
 # 定义一个函数，用于创建原始环境
 def raw_env(render_mode=None):
@@ -537,6 +538,52 @@ class Env(ParallelEnv):
 
         # 调用父类的关闭方法
         return super().close()
+
+    def get_graph_observation(self):
+        node_features = []
+        edge_index = []
+        edge_attr = []
+
+        # 1. 构建节点特征 (Node Features)
+        # 假设特征为: [历史请求频率向量 (num_content) + 当前缓存状态 (num_content)]
+        # 这里需要你在 Rsu 类或 Env 中维护一个请求频率记录
+        for rsu in self.rsus:
+            # 获取缓存状态 (来自 entites.py 的修改)
+            cache_vec = rsu.get_cache_one_hot(self.max_content)
+            # 获取请求模式 (这里假设你有一个变量 request_counts)
+            # req_vec = rsu.get_request_pattern(...)
+
+            # 简单起见，这里先只用缓存状态演示
+            node_features.append(cache_vec)
+
+        x = torch.tensor(np.array(node_features), dtype=torch.float)
+
+        # 2. 构建边和边特征 (Edges & Edge Attributes)
+        # self.rsu_network 已经是邻接表: {rsu_id: [neighbor_id, ...]}
+        src_list = []
+        dst_list = []
+        weights = []
+
+        for src_id, neighbors in self.rsu_network.items():
+            src_rsu = self.rsus[src_id]
+            for dst_id in neighbors:
+                dst_rsu = self.rsus[dst_id]
+
+                src_list.append(src_id)
+                dst_list.append(dst_id)
+
+                # **核心逻辑**: 边特征 = R2R 延迟
+                # 使用 network.py 中的逻辑估算延迟
+                # 这里简化为距离产生的延迟，或者直接用 hops * latency
+                dist = src_rsu.real_distance(dst_rsu.position)
+                # 归一化延迟作为权重 (越小越好，但 GNN 通常处理“强度”，可能需要取倒数或在模型内部处理)
+                latency = dist / 1000.0  # 简单示例
+                weights.append([latency])
+
+        edge_index = torch.tensor([src_list, dst_list], dtype=torch.long)
+        edge_attr = torch.tensor(weights, dtype=torch.float)
+
+        return Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
 
     # 使用 LRU 缓存来提高性能
     @functools.lru_cache(maxsize=None)

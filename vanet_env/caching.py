@@ -47,7 +47,6 @@ class Caching:
         # 获取筛选后数据框中每条记录的流行度得分列表
         popularity_scores_list = filtered_df["popularity_score"].tolist()
         # 将流行度得分列表转换为 numpy 数组，作为初始概率
-        # 注释提示这里可能会更换为新的模型来计算概率
         probabilities = np.array(popularity_scores_list)
 
         # 将前 num_caching 个元素的概率调整为总和 80%
@@ -177,6 +176,8 @@ class Caching:
             # 如果不重复 id 列表的长度达到 num_content，则停止循环
             if len(unique_top_ids_ordered) == self.num_content:
                 break
+
+        self.content_list = unique_top_ids_ordered
 
         min_size = 512
         max_size = 2048

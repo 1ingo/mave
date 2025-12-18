@@ -34,7 +34,6 @@ from vanet_env.onpolicy.envs.env_wrappers import (
     ShareDummyVecEnv,
 )
 
-
 # 环境的最大步数
 env_max_step = 10850
 # 总的最大步数
@@ -46,6 +45,7 @@ render_mode = "human"
 # 地图名称，这里设置为 "seattle"
 # map_name = "london"
 map_name = "seattle"
+
 
 # 创建用于评估的环境
 def make_eval_env():
@@ -59,9 +59,12 @@ def make_eval_env():
                 map=map_name
             )
             return env
+
         return init_env
+
     # 使用 ShareDummyVecEnv 创建一个包含单个环境的向量环境
     return ShareDummyVecEnv([get_env_fn()], is_discrete=is_discrete)
+
 
 # 创建用于训练的环境
 def make_train_env():
@@ -72,9 +75,12 @@ def make_train_env():
                 None, max_step=env_max_step, is_discrete=is_discrete, map=map_name
             )
             return env
+
         return init_env
+
     # 使用 ShareDummyVecEnv 创建一个包含单个环境的向量环境
     return ShareDummyVecEnv([get_env_fn()], is_discrete=is_discrete)
+
 
 # 多智能体策略类，包含多种策略和实验运行方法
 class MultiAgentStrategies:
@@ -168,33 +174,33 @@ class MultiAgentStrategies:
                 nb_mratio = [2] * self.env.action_space_dims[1]
             else:
                 self_mratio = [
-                    math.floor(idle_self_ratio / idle_all_ratio * self.env.bins)
-                ] * self.env.action_space_dims[0]
+                                  math.floor(idle_self_ratio / idle_all_ratio * self.env.bins)
+                              ] * self.env.action_space_dims[0]
                 nb_mratio = [
-                    math.floor(idle_nb_ratio / idle_all_ratio * self.env.bins)
-                ] * self.env.action_space_dims[1]
+                                math.floor(idle_nb_ratio / idle_all_ratio * self.env.bins)
+                            ] * self.env.action_space_dims[1]
             # 顺便确认 nb 是否正常
             # 根据 idle_ratio 确定分配值？
             # choice 里的值可以改为 math.floor(... * self.env.bins)
             if idle_all_ratio >= 1:
                 # 高空闲倾向于分配高 job_ratio 和高 alloc、cp_usage 等
                 job_ratios = [
-                    int(np.random.choice([3, 4]))
-                ] * self.env.action_space_dims[2]
+                                 int(np.random.choice([3, 4]))
+                             ] * self.env.action_space_dims[2]
                 cp_alloc = [int(np.random.choice([3, 4]))] * self.env.action_space_dims[
                     3
                 ]
                 # 节能选择
                 cp_usage = [
-                    int(np.random.choice([0, 1, 2]))
-                ] * self.env.action_space_dims[5]
+                               int(np.random.choice([0, 1, 2]))
+                           ] * self.env.action_space_dims[5]
             else:
                 job_ratios = [
-                    int(np.random.choice([0, 1, 2]))
-                ] * self.env.action_space_dims[2]
+                                 int(np.random.choice([0, 1, 2]))
+                             ] * self.env.action_space_dims[2]
                 cp_alloc = [
-                    int(np.random.choice([0, 1, 2]))
-                ] * self.env.action_space_dims[3]
+                               int(np.random.choice([0, 1, 2]))
+                           ] * self.env.action_space_dims[3]
                 # 激进选择
                 cp_usage = [int(np.random.choice([3, 4]))] * self.env.action_space_dims[
                     5
@@ -207,8 +213,8 @@ class MultiAgentStrategies:
                 ]
             else:
                 bw_alloc = [
-                    int(np.random.choice([0, 1, 2]))
-                ] * self.env.action_space_dims[4]
+                               int(np.random.choice([0, 1, 2]))
+                           ] * self.env.action_space_dims[4]
 
             # 模拟 FIFO，这里应该写在 env 里然后这里调用，时间匆忙，直接写外面了
             # 模拟 LRU，这里应该写在 env 里然后这里调用，时间匆忙，直接写外面了
@@ -224,13 +230,13 @@ class MultiAgentStrategies:
                 ]
 
             action = (
-                self_mratio
-                + nb_mratio
-                + job_ratios
-                + cp_alloc
-                + bw_alloc
-                + cp_usage
-                + caching_content
+                    self_mratio
+                    + nb_mratio
+                    + job_ratios
+                    + cp_alloc
+                    + bw_alloc
+                    + cp_usage
+                    + caching_content
             )
 
             if self.action_spaces[agent].contains(action):
@@ -296,13 +302,13 @@ class MultiAgentStrategies:
 
             # 将各个部分拼接成一个完整的 action 向量
             action = (
-                self_mratio
-                + nb_mratio
-                + job_ratios
-                + cp_alloc
-                + bw_alloc
-                + cp_usage
-                + caching_content
+                    self_mratio
+                    + nb_mratio
+                    + job_ratios
+                    + cp_alloc
+                    + bw_alloc
+                    + cp_usage
+                    + caching_content
             )
 
             # 检查生成的 action 是否在允许的 action_space 内
@@ -323,7 +329,7 @@ class MultiAgentStrategies:
             steps: 模拟的步数。
 
         Returns:
-            metrics: 一个字典，包含 QoE、EE、奖励和资源使用情况随时间的变化。
+            metrics: 一个字典，包含 QoE、Delay (替换 EE)、奖励和资源使用情况随时间的变化。
         """
         if strategy is not None:
             self.strategy = strategy
@@ -336,8 +342,8 @@ class MultiAgentStrategies:
                 self.strategy = self.fairalloc_strategy
         # 记录每个时间步的用户体验质量（QoE）
         qoe_records = []
-        # 记录每个时间步的能量效率（EE）
-        ee_records = []
+        # 记录每个时间步的平均延迟（Delay），替换原来的 EE
+        delay_records = []
         # 记录每个时间步的资源使用情况
         resource_records = []
         # 记录每个时间步的奖励
@@ -377,18 +383,23 @@ class MultiAgentStrategies:
 
             # 收集指标
             # 计算所有车辆的平均 QoE
-            qoe = np.mean([float(v.job.qoe) for v in self.env.vehicles.values()])
             qoe_real = []
-            ees = []
+            delays = []
             hit_ratios = []
+
             for rsu in self.env.rsus:
+                # [新增] 读取每个 RSU 的平均处理延迟 (由 utility.py 计算)
+                # 如果 RSU 没有处理任务，avg_total_delay 可能是 0.0
+                delays.append(float(rsu.avg_total_delay))
+
+                # 收集车辆 QoE
                 for vid in rsu.range_connections:
                     if vid in self.env.vehicle_ids:
                         qoe_real.append(float(self.env.vehicles[vid].job.qoe))
-                        for hit_ratio in rsu.hit_ratios:
-                            hit_ratios.append(hit_ratio)
-                        # 为什么 ee 至少有 1.0
-                        ees.append(float(rsu.ee))
+
+                # 收集缓存命中率
+                for hit_ratio in rsu.hit_ratios:
+                    hit_ratios.append(hit_ratio)
 
             # 创建一个全为 1 的活动掩码
             active_masks = np.ones((self.num_agents), dtype=np.float32)
@@ -396,35 +407,42 @@ class MultiAgentStrategies:
             # 将空闲的智能体对应的活动掩码设置为 0
             active_masks[(idle_masks[time_step] == True)] = 0
             # resource_usage = np.mean([rsu.cp_usage for rsu in self.env.rsus])
+
+            # 初始化 reward 和 ava_rews，防止为空报错
+            reward = 0.0
+            ava_rews = 0.0
             if rewards != []:
                 # 计算平均奖励
                 reward = np.mean([reward for reward in rewards.values()])
                 # 计算可用奖励
-                ava_rews = (np.array(list(rewards.values())) * active_masks).sum() / (
-                    active_masks.sum() + 1e-6
-                )
+                if active_masks.sum() > 0:
+                    ava_rews = (np.array(list(rewards.values())) * active_masks).sum() / (
+                            active_masks.sum() + 1e-6
+                    )
 
             # 将当前时间步的平均 QoE 添加到记录列表中
-            qoe_records.append(np.mean(qoe_real))
-            # 将当前时间步的平均 EE 添加到记录列表中
-            ee_records.append(np.mean(ees))
+            qoe_records.append(np.mean(qoe_real) if qoe_real else 0.0)
+            # 将当前时间步的平均 Delay 添加到记录列表中 (替换 EE)
+            delay_records.append(np.mean(delays))
+
             # resource_records.append(resource_usage)
             # 将当前时间步的奖励添加到记录列表中
             reward_records.append(reward)
             # 将当前时间步的可用奖励添加到记录列表中
             ava_reward_records.append(ava_rews)
             # 将当前时间步的平均命中率添加到记录列表中
-            hit_ratio_records.append(np.nanmean(hit_ratios))
+            hit_ratio_records.append(np.nanmean(hit_ratios) if hit_ratios else 0.0)
 
         # 关闭环境
         self.env.close()
         return {
             "QoE": qoe_records,
-            "EE": ee_records,
+            "Delay": delay_records,  # 键名更改为 Delay
             "Rewards": reward_records,
             "Ava_rewards": ava_reward_records,
             "Hit_ratio": hit_ratio_records,
         }
+
 
 # 解析命令行参数
 def parse_args(args, parser):
@@ -435,6 +453,7 @@ def parse_args(args, parser):
     # 解析已知参数
     all_args = parser.parse_known_args(args)[0]
     return all_args
+
 
 # 使用 rMAPPO 算法进行评估
 def rmappo(args):
@@ -512,9 +531,9 @@ def rmappo(args):
 
     # 运行目录
     run_dir = (
-        Path(os.path.split(os.path.dirname(os.path.abspath(__file__)))[0] + "/results")
-        / env_name
-        / alg_name
+            Path(os.path.split(os.path.dirname(os.path.abspath(__file__)))[0] + "/results")
+            / env_name
+            / alg_name
     )
 
     if not run_dir.exists():
@@ -526,14 +545,14 @@ def rmappo(args):
             project=all_args.env_name,
             notes=socket.gethostname(),
             name=str(prefix)
-            + "_"
-            + str(all_args.algorithm_name)
-            + "_"
-            + str(all_args.experiment_name)
-            + "_"
-            + str("nb")
-            + "_seed"
-            + str(all_args.seed),
+                 + "_"
+                 + str(all_args.algorithm_name)
+                 + "_"
+                 + str(all_args.experiment_name)
+                 + "_"
+                 + str("nb")
+                 + "_seed"
+                 + str(all_args.seed),
             group=all_args.map_name,
             dir=str(run_dir),
             job_type="training" if not is_eval else "evaling",
@@ -605,6 +624,7 @@ def rmappo(args):
         runner.writter.export_scalars_to_json(str(runner.log_dir + "/summary.json"))
         runner.writter.close()
 
+
 # 运行其他策略的实验
 def other_policy(args, render=None):
     # 实验名称
@@ -636,15 +656,16 @@ def other_policy(args, render=None):
         # 计算平均命中率
         avg_hit_ratio = np.nanmean(metrics["Hit_ratio"])
         # 计算平均可用奖励
-        avg_ava_rew = np.mean(metrics["Hit_ratio"])
+        avg_ava_rew = np.mean(metrics["Ava_rewards"])  # 修正了之前的拼写错误
         print(f"{alg_name}_avg_step_reward:{av}")
         print(f"{alg_name}_avg_step_qoe:{avg_qoe}")
         print(f"{alg_name}_avg_step_hit_ratio:{avg_hit_ratio}")
         print(f"{alg_name}_avg_step_ava_reward:{avg_ava_rew}")
 
         # 将指标保存到 DataFrame 中
+        # [修改] 替换 EE 为 Delay
         df = pd.DataFrame(
-            metrics, columns=["QoE", "EE", "Rewards", "Ava_rewards", "Hit_ratio"]
+            metrics, columns=["QoE", "Delay", "Rewards", "Ava_rewards", "Hit_ratio"]
         )
 
         from datetime import datetime
@@ -668,7 +689,7 @@ def other_policy(args, render=None):
 
 
 def main(args):
-    # 
+    #
     # # cProfile.run("other_policy()", sort="time")
 
     # profiler = cProfile.Profile()

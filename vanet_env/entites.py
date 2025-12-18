@@ -4,7 +4,7 @@ import sys
 from typing import List
 
 from shapely import Point
-from vanet_env import network
+
 from vanet_env import env_config
 import traci
 
@@ -452,6 +452,7 @@ class Rsu:
         self.num_atn = num_atn
         # 初始状态为空闲
         self.idle = False
+        self.predicted_demand = set()
 
         # 存储与车辆的距离，使用 OrderedQueueList 管理
         self.distances = OrderedQueueList(max_connections)
@@ -495,6 +496,7 @@ class Rsu:
         self.max_ee = 3
         # 效用值
         self.utility = 0
+        self.avg_total_delay = 0.0
 
         # 服务质量列表
         self.qoe_list = []
@@ -505,6 +507,35 @@ class Rsu:
         self.storage_capacity = env_config.RSU_STORAGE_CAPACITY  # 总容量 C_r
         self.current_storage_usage = 0.0  # 当前已用空间 sum(s_k * x)
         self.prev_caching_set = set()
+
+    def get_node_feature(self, num_content):
+        """
+        [关键] 构建 GNN 的节点特征向量
+        特征应包含：
+        1. 我当前缓存了什么 (Cache State)
+        2. 我未来需要什么 (Predicted Demand)
+        """
+        # 缓存状态 (One-Hot / Multi-Hot)
+        cache_vec = np.zeros(num_content, dtype=np.float32)
+        for c in self.caching_contents.olist:
+            if c is not None and 0 <= c < num_content:
+                cache_vec[int(c)] = 1.0
+
+        # 预测需求状态 (One-Hot)
+        # 这告诉 GNN: "虽然我现在没这个内容，但我马上就要用了！"
+        demand_vec = np.zeros(num_content, dtype=np.float32)
+        for c in self.predicted_demand:
+            if 0 <= c < num_content:
+                demand_vec[int(c)] = 1.0
+
+        # 拼接: [Cache_State, Predicted_Demand]
+        return np.concatenate([cache_vec, demand_vec])
+
+    def add_predicted_demand(self, content_id):
+        self.predicted_demand.add(content_id)
+
+    def clear_predicted_demand(self):
+        self.predicted_demand.clear()
 
     def check_idle(self, rsus, rsu_network):
         """
@@ -772,7 +803,7 @@ class Rsu:
         """
         计算缓存更新产生的总延迟惩罚 T_update
         """
-
+        from vanet_env import network
         total_update_cost = 0.0
 
         # 获取当前(更新后)的缓存集合
@@ -795,6 +826,22 @@ class Rsu:
             total_update_cost += t_fetch
 
         return total_update_cost
+
+    def get_cache_one_hot(self, num_content):
+        """
+        获取当前缓存状态的 One-Hot/Multi-Hot 向量
+        用于 GNN 的节点特征输入
+        """
+        # 初始化全 0 向量
+        state_vector = np.zeros(num_content, dtype=np.float32)
+
+        # 将缓存队列中的内容对应的索引置为 1
+        for content_id in self.caching_contents.olist:
+            if content_id is not None:
+                # 假设 content_id 是整数索引
+                if 0 <= content_id < num_content:
+                    state_vector[content_id] = 1.0
+        return state_vector
 
     # notice, cal utility only when connect this rsu
     def frame_allocate_bandwidth(
@@ -1106,9 +1153,10 @@ class Vehicle:
     def __init__(
         self,
         vehicle_id,
-        transpower,
         sumo,
         join_time,
+        job_type=None,
+        transpower=None,
         init_all=True,
         seed=env_config.SEED,
         max_connections=4,
@@ -1140,7 +1188,7 @@ class Vehicle:
         job_size = random.randint(8, env_config.MAX_JOB_SIZE)
 
         # job_type: 作业的类型
-        job_type = random.randint(0, env_config.NUM_CONTENT - 1)
+        job_type = job_type
 
         # job: 车辆的作业对象，作业 ID 为车辆 ID
         self.job = Job(vehicle_id, job_size, job_type)
@@ -1163,6 +1211,25 @@ class Vehicle:
         self.distance_to_rsu = None
         # connected rsus, may not needed
         # self.connections = OrderedQueueList(max_connections)
+
+    def refresh_job(self, cache_manager, current_time_step, caching_step=100):
+        """
+        当旧任务完成后，生成一个新任务
+        """
+        # 基于当前时间计算流行度
+        if cache_manager is not None:
+            time_idx = min(current_time_step // caching_step, 9)
+            new_job_type = cache_manager.get_content(time_idx)
+
+        # 生成新的任务大小
+        new_job_size = random.randint(8, env_config.MAX_JOB_SIZE)
+
+        # 更新车辆的任务对象
+        self.job = Job(self.vehicle_id, new_job_size, new_job_type)
+        self.job_type = new_job_type  # 保持同步
+
+        # 4. 重置相关状态
+        self.is_cloud = False
 
     def job_process(self, idx, rsu):
         # 开始处理作业

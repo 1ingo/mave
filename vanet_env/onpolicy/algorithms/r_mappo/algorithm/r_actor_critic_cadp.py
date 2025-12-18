@@ -56,6 +56,37 @@ class SelfAttention(nn.Module):
         self.values = values
         return out
 
+class GNNBase(nn.Module):
+    """
+    GNN Base Layer (implementing the 'Update' step of GraphSAGE/GCN)
+    Input: [Self_Features || Aggregated_Neighbor_Features]
+    Output: Encoded State
+    """
+    def __init__(self, args, obs_shape, cat_self=True, attn_internal=False):
+        super(GNNBase, self).__init__()
+
+        self._use_feature_normalization = args.use_feature_normalization
+        self._use_orthogonal = args.use_orthogonal
+        self.hidden_size = args.hidden_size
+
+        obs_dim = obs_shape[0]
+
+        # 这里的 MLP 相当于 GNN 中的 W 矩阵
+        # 公式: h = sigma(W * [h_self, h_neigh])
+        self.fc1 = nn.Linear(obs_dim, self.hidden_size)
+        self.fc2 = nn.Linear(self.hidden_size, self.hidden_size)
+
+        if self._use_feature_normalization:
+            self.feature_norm = nn.LayerNorm(obs_dim)
+
+    def forward(self, x):
+        if self._use_feature_normalization:
+            x = self.feature_norm(x)
+
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+
+        return x
 
 class R_Actor(nn.Module):
     """
@@ -82,8 +113,9 @@ class R_Actor(nn.Module):
         self.tpdv = dict(dtype=torch.float32, device=device)
 
         obs_shape = get_shape_from_obs_space(obs_space)
-        base = CNNBase if len(obs_shape) == 3 else MLPBase
-        self.base = base(args, obs_shape)
+        # base = CNNBase if len(obs_shape) == 3 else MLPBase
+        # self.base = base(args, obs_shape)
+        self.base = GNNBase(args, obs_shape)
 
         if self._use_naive_recurrent_policy or self._use_recurrent_policy:
             self.rnn = RNNLayer(
